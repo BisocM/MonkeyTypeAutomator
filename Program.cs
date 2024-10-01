@@ -3,6 +3,7 @@ using OpenQA.Selenium;
 using Spectre.Console;
 using OpenQA.Selenium.Interactions;
 using System;
+using System.Diagnostics;
 
 namespace MonkeyTypeAutomator
 {
@@ -19,7 +20,6 @@ namespace MonkeyTypeAutomator
             ShowSplashScreen();
 
             desiredWPM = AnsiConsole.Ask<int>("What is your target WPM?");
-            int delay = CalculateKeystrokeDelay(desiredWPM);
 
             var driver = InitializeWebDriver();
             using (driver)
@@ -27,7 +27,11 @@ namespace MonkeyTypeAutomator
                 driver.Navigate().GoToUrl(Url);
                 HandleCookieConsent(driver);
                 AnsiConsole.Prompt(new TextPrompt<string>("Press [green]ENTER[/] to start typing...").AllowEmpty());
-                TryTyping(driver, delay);
+                TryTyping(driver);
+                
+                //Prevent from closing until the user is happy.
+                AnsiConsole.WriteLine("Press [green]ENTER[/] to exit...");
+                Console.ReadLine();
             }
         }
 
@@ -44,10 +48,11 @@ namespace MonkeyTypeAutomator
             return new ChromeDriver(driverService, options);
         }
 
-        private static void TryTyping(IWebDriver driver, int delay)
+        private static void TryTyping(IWebDriver driver)
         {
             var actions = new Actions(driver);
             bool isTyping = true;
+            Stopwatch stopwatch = new Stopwatch(); // For more accurate timing
 
             while (isTyping)
             {
@@ -55,12 +60,28 @@ namespace MonkeyTypeAutomator
                 {
                     var activeWordElement = driver.FindElement(By.CssSelector(".word.active"));
                     string activeWord = string.Join("", activeWordElement.FindElements(By.TagName("letter")).Select(e => e.Text));
-                    TypeWord(actions, activeWord, delay);
+
+                    stopwatch.Restart(); //Start timer for the word
+                    TypeWord(actions, activeWord);
+                    stopwatch.Stop();
+
+                    //Dynamically calculate delay based on actual typing time
+                    int elapsedMilliseconds = (int)stopwatch.ElapsedMilliseconds;
+                    int desiredMilliseconds = CalculateWordTime(activeWord.Length);
+                    int delay = Math.Max(0, desiredMilliseconds - elapsedMilliseconds); //Ensure delay isn't negative
+
+                    Thread.Sleep(delay);
                     isTyping = CheckIfTestIsActive(driver);
+
                 }
                 catch (NoSuchElementException)
                 {
                     Console.WriteLine("Adjusting search for active word...");
+                    Thread.Sleep(1000);
+                }
+                catch (StaleElementReferenceException)
+                {
+                    Console.WriteLine("Stale element exception - ignoring...");
                     Thread.Sleep(1000);
                 }
             }
@@ -68,13 +89,11 @@ namespace MonkeyTypeAutomator
             AnsiConsole.MarkupLine("[bold green]Test complete![/]");
         }
 
-        private static void TypeWord(Actions actions, string word, int delay)
+        private static void TypeWord(Actions actions, string word)
         {
-            foreach (char c in word)
-            {
+            foreach (var c in word)
                 actions.SendKeys(c.ToString()).Perform();
-                Thread.Sleep(delay);
-            }
+            
             actions.SendKeys(" ").Perform();
         }
 
@@ -103,6 +122,13 @@ namespace MonkeyTypeAutomator
         private static bool CheckIfTestIsActive(IWebDriver driver)
         {
             return driver.FindElements(By.CssSelector(".word.active")).Count > 0;
+        }
+
+        private static int CalculateWordTime(int wordLength)
+        {
+            //Adjust word length for spaces (each word effectively has one more character due to the space)
+            double effectiveWordLength = wordLength + 1;
+            return (int)Math.Round(60000.0 / (desiredWPM * (StandardWordLength / effectiveWordLength)));
         }
     }
 }
